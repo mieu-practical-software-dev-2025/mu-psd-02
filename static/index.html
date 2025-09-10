@@ -9,26 +9,174 @@
     <!-- BootStrapをCDNから読み込み -->
 	<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css">
 </head>
+<style>
+    /* #app全体を画面の高さに合わせ、Flexboxコンテナとして設定 */
+    #app {
+        height: 100vh;
+    }
+    /* チャット履歴エリアが残りの高さをすべて使い、内容が多ければスクロールする */
+    .chat-history {
+        flex-grow: 1;
+        overflow-y: auto;
+    }
+    /* preタグのデフォルトマージンをなくし、フォントを親要素に合わせる */
+    pre {
+        margin-bottom: 0;
+        font-family: inherit;
+        font-size: inherit;
+    }
+    /* 吹き出しの角を全体的に丸くする */
+    .chat-history .rounded {
+        border-radius: 1.25rem !important; /* Bootstrapの.roundedを上書き */
+    }
+    /* ユーザーの吹き出し */
+    .user-bubble {
+        border-bottom-right-radius: 0.25rem !important;
+    }
+    /* AIの吹き出し */
+    .ai-bubble {
+        border-bottom-left-radius: 0.25rem !important;
+    }
+    /* 入力フォームとボタンの角を丸くする */
+    .input-form .btn {
+        border-radius: 50rem; /* 角を丸くしてモダンな見た目にする */
+    }
+    .input-form .form-control {
+        border-radius: 1.25rem;
+    }
+</style>
 <body>
 
-    <div id="app" class="container">
-        <h2 class="mb-4">さんぷるあぷり</h2>
-
-        <div class="mb-3">
-            <label for="inputText" class="form-label">テキストを入力してください:</label>
-            <textarea id="inputText" class="form-control" rows="5" v-model="inputText" placeholder="ここにテキストを入力..."></textarea>
+    <div id="app" class="container d-flex flex-column">
+        <div class="d-flex justify-content-center align-items-center my-3 position-relative">
+            <h2 class="m-0 text-center flex-grow-1">献立アシスタント</h2>
+            <div class="position-absolute end-0">
+                <button type="button" class="btn btn-outline-secondary flex-shrink-0" data-bs-toggle="modal" data-bs-target="#historyModal">
+                    献立履歴
+                </button>
+                <button type="button" class="btn btn-success flex-shrink-0 ms-2" data-bs-toggle="modal" data-bs-target="#shoppingListModal">
+                    買い物リスト <span v-if="shoppingList.length > 0" class="badge bg-light text-dark rounded-pill">{{ shoppingList.length }}</span>
+                </button>
+            </div>
         </div>
 
-        <div class="mb-3">
-            <button @click="execute" class="btn btn-primary">実行</button>
-            <button @click="execute_kansai" class="btn btn-success ms-2">関西弁で実行</button>
+        <!-- チャット履歴表示エリア -->
+        <div class="chat-history p-3 mb-3 border rounded" ref="chatHistory">
+            <!-- メッセージのループ -->
+            <div v-for="(message, index) in messages" :key="index" class="d-flex mb-3" :class="message.role === 'user' ? 'justify-content-end' : 'justify-content-start'">
+                <!-- 吹き出し -->
+                <div class="p-3 rounded shadow-sm" :class="message.role === 'user' ? 'bg-primary text-white user-bubble' : 'bg-light ai-bubble'" style="max-width: 80%;">
+                    <!-- メッセージ内容 -->
+                    <pre style="white-space: pre-wrap; font-size: 0.95rem;">{{ message.content }}</pre>
+                </div>
+            </div>
         </div>
-        
-        <h3>結果:</h3>
-        <div class="result-area p-3 border rounded" :class="{ 'alert alert-info': resultText && !resultText.startsWith('エラー:'), 'alert alert-danger': resultText.startsWith('エラー:') }">
-            <pre style="white-space: pre-wrap;">{{ resultText }}</pre>
+
+        <!-- 入力フォームエリア -->
+        <div class="input-form mb-3">
+            <div class="mb-2">
+                <textarea class="form-control" rows="3" v-model="inputText" @keydown.enter.prevent="handleEnter" :disabled="isLoading" placeholder="献立の条件や、使いたい材料を入力してください..."></textarea>
+            </div>
+
+            <!-- 条件ボタンエリア -->
+            <div class="d-md-flex justify-content-center align-items-center mb-3">
+                <div class="mb-2 mb-md-0 me-md-3 text-center">
+                    <span class="fw-bold me-2 d-block d-sm-inline">調理時間:</span>
+                    <div class="btn-group" role="group">
+                        <button v-for="time in timeOptions" :key="time" type="button" class="btn btn-sm" :class="selectedTime === time ? 'btn-primary' : 'btn-outline-primary'" @click="selectTime(time)" :disabled="isLoading">
+                            {{ time }}分
+                        </button>
+                    </div>
+                </div>
+                <div class="mb-2 mb-md-0 text-center">
+                    <span class="fw-bold me-2 d-block d-sm-inline">ジャンル:</span>
+                    <div class="btn-group" role="group">
+                        <button v-for="genre in genreOptions" :key="genre" type="button" class="btn btn-sm" :class="selectedGenre === genre ? 'btn-success' : 'btn-outline-success'" @click="selectGenre(genre)" :disabled="isLoading">
+                            {{ genre }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="text-center mt-2">
+                <button @click="createMenu" class="btn btn-primary w-50" :disabled="isLoading">
+                    <span v-if="isLoading" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    献立を作成
+                </button>
+            </div>
+        </div>
+
+        <!-- 献立履歴モーダル -->
+        <div class="modal fade" id="historyModal" tabindex="-1" aria-labelledby="historyModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="historyModalLabel">献立履歴</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div v-if="menuHistory.length === 0" class="text-center text-muted">
+                            履歴はまだありません。
+                        </div>
+                        <div v-else class="accordion" id="historyAccordion">
+                            <div v-for="(menu, index) in menuHistory" :key="index" class="accordion-item">
+                                <h2 class="accordion-header" :id="'heading' + index">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" :data-bs-target="'#collapse' + index" aria-expanded="false" :aria-controls="'collapse' + index">
+                                        {{ menu.name }}
+                                    </button>
+                                </h2>
+                                <div :id="'collapse' + index" class="accordion-collapse collapse" :aria-labelledby="'heading' + index" data-bs-parent="#historyAccordion">
+                                    <div class="accordion-body">
+                                        <ul class="list-group mb-3">
+                                            <li v-for="(ingredient, i) in menu.ingredients" :key="i" class="list-group-item d-flex justify-content-between align-items-center">
+                                                {{ ingredient.材料名 || ingredient.name }}
+                                                <span class="badge bg-primary rounded-pill">{{ ingredient.分量 || ingredient.quantity }}</span>
+                                            </li>
+                                        </ul>
+                                        <button class="btn btn-sm btn-outline-primary w-100" @click="addToShoppingList(menu)" :disabled="menu.addedToCart">
+                                            {{ menu.addedToCart ? '追加済み' : 'この献立を買い物リストに追加' }}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 買い物リストモーダル -->
+        <div class="modal fade" id="shoppingListModal" tabindex="-1" aria-labelledby="shoppingListModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-scrollable">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="shoppingListModalLabel">買い物リスト</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div v-if="shoppingList.length === 0" class="text-center text-muted">
+                            買い物リストは空です。
+                        </div>
+                        <ul v-else class="list-group">
+                            <li v-for="(item, index) in shoppingList" :key="index" class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>
+                                    {{ item.材料名 || item.name }} <small class="text-muted">({{ item.分量 || item.quantity }})</small>
+                                </span>
+                                <button class="btn btn-sm btn-outline-danger" @click="removeFromShoppingList(index)">削除</button>
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-danger" @click="clearShoppingList" :disabled="shoppingList.length === 0">すべてクリア</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">閉じる</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
+
+    <!-- Bootstrap JS Bundle (Popper.jsを含む) -->
+    <script src="//cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
         const { createApp } = Vue;
@@ -37,17 +185,47 @@
             data() {
                 return {
                     inputText: '',
-                    resultText: 'ここに結果が表示されます。'
+                    messages: [
+                        { role: 'ai', content: 'こんにちは！\n献立の条件（例：暑い日にぴったりの、さっぱりした和食）や、使いたい材料（例：豚肉、玉ねぎ、ピーマン）を入力してください。' }
+                    ],
+                    isLoading: false,
+                    menuHistory: [], // 献立履歴を格納する配列
+                    shoppingList: [], // 買い物リストを格納する配列
+                    timeOptions: [15, 30, 45, 60],
+                    genreOptions: ['和食', '洋食', '中華'],
+                    selectedTime: null,
+                    selectedGenre: null,
                 };
             },
             methods: {
-                async sendRequest(context = null) {
-                    this.resultText = '処理中...';
+                async scrollToBottom() {
+                    // DOMの更新を待ってからスクロールを実行
+                    await this.$nextTick();
+                    const chatHistory = this.$refs.chatHistory;
+                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                },
+                async sendRequest(userText, systemPrompt) {
+                    if (this.isLoading) return;
+
+                    // ユーザーがチャット画面で見るメッセージを作成
+                    let displayMessage = this.inputText.trim();
+                    if (!displayMessage) {
+                        let conditions = [];
+                        if (this.selectedTime) conditions.push(`調理時間: ${this.selectedTime}分`);
+                        if (this.selectedGenre) conditions.push(`ジャンル: ${this.selectedGenre}`);
+                        displayMessage = conditions.join('、') + ' の条件で献立を作成';
+                    }
+                    this.messages.push({ role: 'user', content: displayMessage });
+
+                    // UIの状態を更新
+                    this.inputText = '';
+                    this.isLoading = true;
+                    this.selectedTime = null; // 送信後に選択をリセット
+                    this.selectedGenre = null; // 送信後に選択をリセット
+                    this.scrollToBottom();
+
                     try {
-                        const payload = { text: this.inputText };
-                        if (context) {
-                            payload.context = context;
-                        }
+                        const payload = { text: userText, context: systemPrompt };
 
                         const response = await fetch('/send_api', {
                             method: 'POST',
@@ -57,20 +235,119 @@
                             body: JSON.stringify(payload)
                         });
                         const data = await response.json();
+
                         if (response.ok) {
-                            this.resultText = data.processed_text;
+                            const aiResponseText = data.processed_text;
+                            this.messages.push({ role: 'ai', content: aiResponseText });
+
+                            // 応答から献立名と材料を抽出して履歴に保存
+                            try {
+                                // 献立名を抽出 (例: 「献立名：豚の生姜焼き」)
+                                const menuNameMatch = aiResponseText.match(/献立名[：:\s]+(.+)/);
+                                // 抽出した献立名の後に改行が含まれる場合を考慮して最初の行のみ取得
+                                const menuName = menuNameMatch ? menuNameMatch[1].trim().split('\n')[0] : '名称未設定の献立';
+
+                                // JSONブロックを抽出
+                                const jsonBlockMatch = aiResponseText.match(/```(json)?\s*(\{[\s\S]*?\})\s*```/);
+                                if (jsonBlockMatch && jsonBlockMatch[2]) {
+                                    const parsedJson = JSON.parse(jsonBlockMatch[2]);
+                                    // AIが返すキーの揺れを考慮 (例: '材料' or 'ingredients')
+                                    const ingredients = parsedJson.材料 || parsedJson.ingredients || [];
+
+                                    if (ingredients.length > 0) {
+                                        this.menuHistory.push({
+                                            name: menuName,
+                                            ingredients: ingredients,
+                                            addedToCart: false // 買い物リスト追加済みフラグ
+                                        });
+                                    }
+                                }
+                            } catch (e) {
+                                console.error("献立履歴の解析中にエラーが発生しました:", e);
+                            }
                         } else {
-                            this.resultText = `エラー: ${data.error || '不明なエラーが発生しました。'}`;
+                            this.messages.push({ role: 'ai', content: `エラー: ${data.error || '不明なエラーが発生しました。'}` });
                         }
                     } catch (error) {
-                        this.resultText = `エラー: ${error.message}`;
+                        this.messages.push({ role: 'ai', content: `エラー: ネットワーク接続に問題があるか、サーバーが応答していません。(${error.message})` });
+                    } finally {
+                        this.isLoading = false;
+                        this.scrollToBottom();
                     }
                 },
-                execute() {
-                    this.sendRequest();
+                createMenu() {
+                    // テキスト入力がなく、条件も選択されていない場合は何もしない
+                    if (!this.inputText.trim() && !this.selectedTime && !this.selectedGenre) {
+                        return;
+                    }
+
+                    // --- AIへの指示を作成 ---
+
+                    // 1. 条件ボタンからシステムへの追加指示を作成
+                    // (ボタンが押されていなければ、この部分は空になります)
+                    let conditions = [];
+                    if (this.selectedTime) {
+                        conditions.push(`調理時間は${this.selectedTime}分以内`);
+                    }
+                    if (this.selectedGenre) {
+                        conditions.push(`ジャンルは${this.selectedGenre}`);
+                    }
+
+                    let conditionText = "";
+                    if (conditions.length > 0) {
+                        // 例: 「調理時間は30分以内、ジャンルは和食の条件で、」
+                        conditionText = conditions.join("、") + "の条件で、";
+                    }
+
+                    // 2. AIへの基本的な指示(システムプロンプト)を作成
+                    const basePrompt = "入力されたテキスト（材料または条件）に基づいて一食分の献立を作成してください。応答には次の指定されるものだけにしてください。必ず「献立名：(ここに献立名)」という行と、約80文字での献立の説明の行と、材料リストを記述した以下の形式のJSONコードブロックを含めてください。\n\n```json\n{\n  \"材料\": [\n    {\"材料名\": \"材料の名前\", \"分量\": \"材料の分量\"}\n  ]\n}\n```";
+                    
+                    // 1と2を結合して、最終的なシステムプロンプトを完成
+                    const finalSystemPrompt = conditionText + basePrompt;
+
+                    // 3. ユーザーからの入力テキストを準備
+                    let userTextForApi = this.inputText.trim();
+                    if (!userTextForApi && (this.selectedTime || this.selectedGenre)) {
+                        // テキスト入力がなく、条件ボタンだけが押されている場合
+                        userTextForApi = "おまかせで";
+                    }
+
+                    this.sendRequest(userTextForApi, finalSystemPrompt);
                 },
-                execute_kansai() {
-                    this.sendRequest("あなたは親切な関西人です。ユーザーからの入力に対して、必ず関西弁で、親しみやすく、そして140字以内で回答してください。");
+                handleEnter(event) {
+                    // Shift+Enterで改行、Enterのみで送信（デフォルトのボタンのアクション）
+                    if (!event.shiftKey) {
+                        event.preventDefault();
+                        this.createMenu();
+                    }
+                },
+                addToShoppingList(menu) {
+                    if (menu.addedToCart) return; // 既に追加済みなら何もしない
+
+                    menu.ingredients.forEach(ingredient => {
+                        // 買い物リストに同じ材料名がないか確認
+                        const ingredientName = ingredient.材料名 || ingredient.name;
+                        const exists = this.shoppingList.some(item => (item.材料名 || item.name) === ingredientName);
+                        
+                        if (!exists) {
+                            this.shoppingList.push(ingredient);
+                        }
+                    });
+                    menu.addedToCart = true; // 追加済みのフラグを立てる
+                },
+                removeFromShoppingList(index) {
+                    this.shoppingList.splice(index, 1);
+                },
+                clearShoppingList() {
+                    this.shoppingList = [];
+                    // 献立履歴の「追加済み」フラグもすべてリセットする
+                    this.menuHistory.forEach(menu => menu.addedToCart = false);
+                },
+                selectTime(time) {
+                    this.selectedTime = this.selectedTime === time ? null : time; // 再度クリックで選択解除
+                },
+                selectGenre(genre) {
+                    this.selectedGenre = this.selectedGenre === genre ? null : genre; // 再度クリックで選択解除
                 }
             }
         }).mount('#app');
