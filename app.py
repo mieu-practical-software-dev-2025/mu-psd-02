@@ -64,13 +64,13 @@ def send_api():
         app.logger.error("Received text is empty or whitespace.")
         return jsonify({"error": "Input text cannot be empty"}), 400
     
-    # contextがあればsystemプロンプトに設定、なければデフォルト値
-    system_prompt = "140字以内で回答してください。" # デフォルトのシステムプロンプト
-    if 'context' in data and data['context'] and data['context'].strip():
-        system_prompt = data['context'].strip()
-        app.logger.info(f"Using custom system prompt from context: {system_prompt}")
-    else:
-        app.logger.info(f"Using default system prompt: {system_prompt}")
+    # 'context'フィールドがリクエストのJSONボディに存在し、空でないことを確認
+    if 'context' not in data or not data['context'].strip():
+        app.logger.error("Request JSON is missing 'context' or it is empty.")
+        return jsonify({"error": "Missing or empty 'context' in request body"}), 400
+
+    system_prompt = data['context'].strip()
+    app.logger.info("Using system prompt from context.")
 
     try:
         # OpenRouter APIを呼び出し
